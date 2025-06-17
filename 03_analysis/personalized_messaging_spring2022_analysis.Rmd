@@ -1,0 +1,1081 @@
+---
+  title: "Personalized Messaging Paper Analysis"
+output:
+  pdf_document: default
+word_document: default
+html_document: default
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+install.packages("PairedData")
+
+library(haven)
+#library(tidyverse) # might need to add this back
+library(dplyr)
+library(miceadds)
+library(openxlsx)
+library(car)
+library(lmtest)
+#library(ri)
+#install.packages("devtools")
+library(devtools)
+library(knitr)
+library(readr)
+#library(metafor)
+library(ggplot2)
+library(forestplot)
+#library(ri)
+library(ri2)
+library(stargazer)
+library(sandwich)
+library(knitr)
+library(kableExtra)
+
+```
+
+```{r data_load, include=FALSE}
+# Read in pooled model data
+model_data <- read_dta('R:/Proving_Ground/data/papers/personalized_messaging_spring2022/output/stacked_model_data_file.dta')
+
+tables <- "R:/Proving_Ground/tables_figures_new/papers/personalized_messaging_spring2022//tables/"
+figs <- "R:/Proving_Ground/tables_figures_new/papers/personalized_messaging_spring2022//"
+
+results.tab <- paste0(tables, "results_tables.xlsx")
+
+# add partner index that is basic integer
+model_data$part <- group_indices(model_data, pid)
+# add abs rate
+model_data$abs_rate <- model_data$cum_days_absent/model_data$cum_days_enrolled
+
+model_data$pid[model_data$pid==  [REMOVED] ] <- [REMOVED] 
+model_data$pid[model_data$pid==  [REMOVED] ] <- [REMOVED]  
+```
+
+
+```{r poisson_models, echo=FALSE}
+# Poisson Results (Primary Model)
+
+# Set up data
+source('R:/Proving_Ground/programs_new/papers/personalized_messaging_spring2022/utilities/pg_aggprep.R')
+source('R:/Proving_Ground/programs_new/papers/personalized_messaging_spring2022/utilities/spline_basis.R')
+poiss_dat <- pg_aggprep(model_data, percentiles=c(0, 0.2, 0.4, 0.6, 0.8, 0.95)) # same sample as linear models but adding a few additional features for the Poissons
+
+# Set up model storage
+poiss_list <- list()
+
+# Set up completely pooled treatment estimate model storage
+poiss_nocl_list <- list()
+se_list <- list()
+p_list <- list()
+
+# Helper functions to pull std. errors, p values, where input is a fit miceadds model
+pull_se <- function(x) {
+  all_se <- sqrt(diag(x[[2]]))
+  return(all_se)
+}
+pull_p <- function(x) {
+  treatment_p <- as.numeric(summary(x)['treatment','Pr(>|z|)'])
+  #treatment_p <- coef(summary(x))[,'Pr(>|z|)']
+  return(treatment_p)
+}
+
+# 1. Partner fixed effects
+
+p1.form <- "cum_days_absent ~ treatment + offset(log(cum_days_enrolled))"
+poiss_nocl_list[[1]] <- glm(formula=p1.form, data = poiss_dat, family = "poisson")
+poiss_list[[1]] <- glm.cluster(formula = p1.form, data = poiss_dat, family = "poisson", cluster = 'pooled_rand_unit')
+
+# 2. Block fixed effects
+p2.form <- "cum_days_absent ~ treatment + factor(pooled_rand_bin) + offset(log(cum_days_enrolled))"
+poiss_nocl_list[[2]] <- glm(formula=p2.form, data = poiss_dat, family = "poisson")
+poiss_list[[2]] <- glm.cluster(formula = p2.form, data = poiss_dat, family = "poisson", cluster = 'pooled_rand_unit')
+
+
+# 3. All covariates
+p3.form <- "cum_days_absent ~ treatment +
+ pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+factor(mi_pr_prior) +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    factor(mi_sch_prior) +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled))"
+poiss_nocl_list[[3]] <- glm(formula=p3.form, data = poiss_dat, family = "poisson")
+poiss_list[[3]] <- glm.cluster(formula = p3.form, data = poiss_dat, family = "poisson", cluster = 'pooled_rand_unit')
+
+
+# Populate lists of std. errors, p values
+se_list <- lapply(poiss_list, pull_se)
+p_list <- lapply(poiss_list, pull_p)
+
+
+
+# Set up completely pooled arm (mode) treatment estimate models for POISSON
+poiss_list.arm_for_test <- list() # first do it for just the f-test...later get the individual estimates for each arm
+
+data_arms <- poiss_dat[poiss_dat$arm!=1, ] # new dataset without control (again, this is ONLY FOR F-TEST SINCE WE WANT TO COMPARE ONLY BETWEEN THE TREATMENT ARMS, NOT THE CONTROL)
+
+# 3. All covariates
+p3.form.arm_for_test <- "cum_days_absent ~ factor(arm) +
+   pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+factor(mi_pr_prior) +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    factor(mi_sch_prior) +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled))"
+poiss_list.arm_for_test[[3]] <- glm.cluster(p3.form.arm_for_test, data = poiss_dat, family ="poisson", cluster = 'pooled_rand_unit')  # now run the f-test!
+
+#now do the same thing, but with control group in order to display the estimates
+poiss_list.arm <- list()
+
+# 3. All covariates
+p3.form.arm <- "cum_days_absent ~ factor(arm) +
+   pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+factor(mi_pr_prior) +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    factor(mi_sch_prior) +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled))"
+poiss_list.arm[[3]] <- glm.cluster(p3.form.arm, data = poiss_dat, family ="poisson", cluster = 'pooled_rand_unit')
+
+
+# Set up completely pooled treatment estimate models for POISSON (by 10-week intervals)
+poiss_list.weeks <- list()
+
+
+data_weeks_0_to_10 <- poiss_dat[poiss_dat$enrolled_at_all_wks_0_to_10==1, ] # only include students enrolled in weeks 0-10
+
+# 1. Weeks 1-10
+p1.form.weeks <- "cum_days_absent_0_to_10 ~ treatment +
+   pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+factor(mi_pr_prior) +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    factor(mi_sch_prior) +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled_0_to_10))"
+poiss_list.weeks[[1]] <- glm.cluster(p1.form.weeks, data = data_weeks_0_to_10, family = "poisson", cluster = 'pooled_rand_unit')
+
+data_weeks_10_to_20 <- poiss_dat[poiss_dat$enrolled_at_all_wks_10_to_20==1, ]
+
+# 2. Weeks 10-20
+p2.form.weeks <- "cum_days_absent_10_to_20 ~ treatment +
+   pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+factor(mi_pr_prior) +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    factor(mi_sch_prior) +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled_10_to_20))"
+poiss_list.weeks[[2]] <- glm.cluster(p2.form.weeks, data = data_weeks_10_to_20, family = "poisson", cluster = 'pooled_rand_unit')
+
+
+# 3. Weeks 20-30
+data_weeks_20_to_30 <- poiss_dat[poiss_dat$enrolled_at_all_wks_20_to_30==1, ]
+
+# 2. Weeks 20-30 (excluding mi_sch_prior because there is no contrast)
+p3.form.weeks <- "cum_days_absent_20_to_30 ~ treatment +
+   pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+factor(mi_pr_prior) +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled_20_to_30))"
+poiss_list.weeks[[3]] <- glm.cluster(p3.form.weeks, data = data_weeks_20_to_30, family = "poisson", cluster = 'pooled_rand_unit')
+
+
+
+# Set up completely pooled treatment estimate models for POISSON by whether [REMOVED]  was excluded
+poiss_list.[REMOVED]_excluded <- list()
+
+data_[REMOVED]_excluded <- poiss_dat[poiss_dat$[REMOVED]_excluded==1, ]
+
+#[REMOVED]  Excluded
+p3.form.[REMOVED]_excluded <- "cum_days_absent ~ treatment +
+   pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+factor(mi_pr_prior) +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    factor(mi_sch_prior) +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled))"
+poiss_list.[REMOVED]_excluded[[1]] <- glm.cluster(p3.form.[REMOVED]_excluded, data = data_[REMOVED]_excluded, family = "poisson", cluster = 'pooled_rand_unit')
+
+
+
+# Create a new dataset that does not include districts that did not report FRPL because they were community eligible
+data_no_cep_districts <- poiss_dat[poiss_dat$pid!=[REMOVED], ]
+data_no_cep_districts <- data_no_cep_districts[data_no_cep_districts$pid!=[REMOVED], ]
+
+
+
+```
+
+
+```{r poisson subgroups, echo=FALSE}
+# Subgroup estimates FOR POISSON
+
+# Grade
+model_data_pk_recoded_k_p <- poiss_dat
+model_data_pk_recoded_k_p$exp_grade <- ifelse(model_data_pk_recoded_k_p$exp_grade == -2, -1, model_data_pk_recoded_k_p$exp_grade) # first rolling preschool into into PK because of small sample in PK
+model_data_pk_recoded_k_p$exp_grade <- ifelse(model_data_pk_recoded_k_p$exp_grade == -1, 0, model_data_pk_recoded_k_p$exp_grade) # rolling PK into K because of small sample in PK
+by.grade_p <- glm.cluster(paste0(p3.form, ' + treatment:factor(exp_grade)'),
+                          data = model_data_pk_recoded_k_p, family = "poisson",
+                          cluster = 'pooled_rand_unit')
+
+grade.test_p <- linearHypothesis(by.grade_p, c(
+  "treatment:factor(exp_grade)1",
+  "treatment:factor(exp_grade)2",
+  "treatment:factor(exp_grade)3",
+  "treatment:factor(exp_grade)4",
+  "treatment:factor(exp_grade)5",
+  "treatment:factor(exp_grade)6",
+  "treatment:factor(exp_grade)7",
+  "treatment:factor(exp_grade)8",
+  "treatment:factor(exp_grade)9",
+  "treatment:factor(exp_grade)10",
+  "treatment:factor(exp_grade)11",
+  "treatment:factor(exp_grade)12"),
+  singular.ok = T,
+  test = 'F')
+
+# Partner
+by.pid_p <- glm.cluster(paste0(p3.form, ' + treatment:factor(part)'),
+                        data = poiss_dat, family = "poisson",
+                        cluster = 'pooled_rand_unit')
+pid.test_p <- linearHypothesis(by.pid_p, c("treatment:factor(part)2",
+                                           "treatment:factor(part)3",
+                                           "treatment:factor(part)4",
+                                           "treatment:factor(part)5", 
+                                           "treatment:factor(part)6"),
+                               singular.ok = T,
+                               test = 'F') # joint test because multiple levels of subgroup
+
+# Gender
+by.gender_p <- glm.cluster(paste0(p3.form, ' + treatment:factor(xmale)'),
+                           data = poiss_dat, family = "poisson",
+                           cluster = 'pooled_rand_unit') #changed by [REMOVED] from sid on 8/3
+
+# Race
+by.race_p <- glm.cluster(paste0(p3.form, ' + treatment:factor(xrace)'),
+                         data = poiss_dat, family = "poisson",
+                         cluster = 'pooled_rand_unit')
+race.test_p <- linearHypothesis(by.race_p, c("treatment:factor(xrace)3",
+                                             "treatment:factor(xrace)5",
+                                             "treatment:factor(xrace)7"),
+                                singular.ok = T,
+                                test = 'F') # joint test because of multiple levels of subgroup
+
+# ELL
+by.ell_p <- glm.cluster(paste0(p3.form, ' + treatment:factor(xell)'),
+                        data = poiss_dat, family = "poisson",
+                        cluster = 'pooled_rand_unit')
+
+# FRPL
+by.frpl_p <- glm.cluster(paste0(p3.form, ' + treatment:factor(xfrpl)'),
+                         data = data_no_cep_districts, family = "poisson",
+                         cluster = 'pooled_rand_unit')
+
+# SPED
+by.sped_p <- glm.cluster(paste0(p3.form, ' + treatment:factor(xsped)'),
+                         data = poiss_dat, family = "poisson",
+                         cluster = 'pooled_rand_unit')
+
+# Arm
+# model_list.arm[[3]] from above is the full covariate, fit arm model so no need to re-run here
+arm.test_p <- linearHypothesis(poiss_list.arm_for_test[[3]], 
+                               c("factor(arm)2 = factor(arm)3",
+                                 "factor(arm)2 = factor(arm)4",
+                                 "factor(arm)2 = factor(arm)5",
+                                 "factor(arm)2 = factor(arm)6"),
+                               singular.ok = T,
+                               test = 'F')
+
+#changed by [REMOVED] on 8/3
+poiss_dat_for_abs_test <- poiss_dat 
+poiss_dat_for_abs_test <- poiss_dat_for_abs_test[complete.cases(poiss_dat_for_abs_test$prior_abs_rate), ]
+
+# 3. New to take out mi_pr_prior (no contrast bc we took out those!t)
+p3.form_for_abs_test <- "cum_days_absent ~ treatment +
+ pr_prior_abs_rate_1 +
+ pr_prior_abs_rate_2 +
+ pr_prior_abs_rate_3 +
+ pr_prior_abs_rate_4 +
+ pr_prior_abs_rate_5 +
+ pr_prior_abs_rate_6 +
+pre_treat_abs_rate_1 +
+pre_treat_abs_rate_2 +
+pre_treat_abs_rate_3 +
+pre_treat_abs_rate_4 +
+pre_treat_abs_rate_5 +
+pre_treat_abs_rate_6 +
+factor(mi_pre_treat) +
+    factor(xmale) +
+    factor(xsped) +
+    factor(xfrpl) +
+    factor(xell) +
+    factor(xrace) +
+    factor(exp_grade) +
+    log_sch_prior_avg_days_absent +
+    factor(mi_sch_prior) +
+    log_schgr_prior_avg_days_absent +
+    factor(mi_schgr_prior) +
+    factor(pooled_rand_bin)+
+offset(log(cum_days_enrolled))"
+
+#Prior Absences
+by.prior_abs_p <- glm.cluster(paste0(p3.form_for_abs_test, ' + treatment:factor(prior_abs_high)'),  # took out just factor(prior_abs_high)
+                              data = poiss_dat_for_abs_test, family = "poisson",
+                              cluster = 'pooled_rand_unit') #works with poiss_dat but not poiss_dat_for_abs_test
+
+
+
+
+```
+
+
+```{r poisson tables, results='asis', include=FALSE}
+# Tables (Poisson)
+
+
+# Table of which partners ran which arms in which grades
+partners_arms_grades_p <- rbind(c('',        '',   '',  'Partner','', '', ''),
+                                c('Arm',        'A',    'B',      'C',   'D',     'E',        'F'),
+                                c('Mail',    '1, 8-9',  '2-12',  '',    '',      'PreK-12',  ''),
+                                c('Backpack','1, 8-9',  '',       '',     '',      '',         ''),
+                                c('Text',    '1, 8-9', '',         '',     '',      '',         ''),
+                                c('Email',   '1, 8-9',  '',     'PreK-12','',      '',         ''),
+                                c('Robocall','1, 8-9', '',         '',    'K-12',  '',         '7-12'))
+kbl(partners_arms_grades_p, caption = 'Treatment Arm Implementation', booktabs = TRUE, linesep = "", align = 'c') %>%
+  row_spec(2, hline_after = TRUE) #%>%
+add_footnote("Cells left blank indicate a partner did not run that arm.", notation = "none")
+
+# Balance tables (one for each treatment arm)
+options(knitr.kable.NA = '') # set so NAs just display as blank cells
+balance_tables <- lapply(2:6, function(i) readWorkbook(paste0('R:/Proving_Ground/tables_figures_new/papers/personalized_messaging_spring2022/Balance_Tables_By_Arm/balance_table_arm_',i,'.xlsx')))
+balance_format_helper <- function(i) {
+  df <- balance_tables[[i]]
+  treatment_arms <- c('Backpack','Email','Mail','Robocall', 'Text')
+  names(df) <- c('Trait','Control',paste0(treatment_arms[i],' Difference'),'P-Value') # rename columns
+  df[,2:ncol(df)] <- round(df[,2:ncol(df)], 3) # round entries to three decimal places
+  N_rindex <- which(df$Trait == 'N')
+  nc <- ncol(df)  
+  df[N_rindex,2:nc] <- sapply(as.numeric(df[N_rindex,2:nc]), function(x) if (!is.na(x)) {formatC(x, format='d')} else {x}) # don't want decimal places to appear for N's
+  return(df)
+}
+balance_tables_formatted <- lapply(1:5, balance_format_helper)
+kbl(balance_tables_formatted[[1]], caption = 'Balance for Mail Arm', booktabs = TRUE) %>%
+  row_spec(12, hline_after = TRUE)
+kbl(balance_tables_formatted[[2]], caption = 'Balance for Backpack Arm', booktabs = TRUE) %>%
+  row_spec(12, hline_after = TRUE)
+kbl(balance_tables_formatted[[3]], caption = 'Balance for Text Arm', booktabs = TRUE) %>%
+  row_spec(12, hline_after = TRUE)
+kbl(balance_tables_formatted[[4]], caption = 'Balance for Email Arm', booktabs = TRUE) %>%
+  row_spec(10, hline_after = TRUE)
+kbl(balance_tables_formatted[[5]], caption = 'Balance for Robocall Arm', booktabs = TRUE) %>%
+  row_spec(10, hline_after = TRUE)
+
+
+# Main results table
+#ri_table <- ri_table[order(ri_table$model),] # making sure this table is in order of model number ascending
+p_vec <- round(unlist(p_list),3)
+cntrl_mean_abs <- rep(round(with(poiss_dat, mean(cum_days_absent[treatment==0])),3),3)
+stargazer(poiss_nocl_list[[1]], #using non-clustered SEs since stargazer can't use it from glm.cluster (estimates are the same so doesn't matter)
+          poiss_nocl_list[[2]],
+          poiss_nocl_list[[3]],
+          se = se_list,
+          title = 'Main Models',
+          keep = 'treatment',
+          covariate.labels = 'Treatment',
+          omit.stat = c('rsq', 'adj.rsq', 'ser', 'f'),
+          header = FALSE,
+          dep.var.labels.include = FALSE,
+          dep.var.caption = '',
+          omit.table.layout = 'n',
+          star.cutoffs = NA,
+          add.lines = list(c('Model p-value',p_vec),
+                           c('Clustering','Yes','Yes','Yes'),
+                           c('Block Fixed Effects','No','Yes','Yes'),
+                           c('Full Covariates','No','No','Yes'),
+                           c('Control Mean Absences',cntrl_mean_abs)))
+
+
+
+
+# Helper functions to specifically pull treatment estimates, std. errors
+pull_treat <- function(x) {
+  treatment_est <- round(as.numeric(x[[1]][['coefficients']]['treatment']), 3)
+  return(treatment_est)
+}
+pull_treat_se <- function(x) {
+  treat_se <- round(sqrt(x[[2]]['treatment','treatment']), 3)
+  return(treat_se)
+}
+
+# Poisson (previously alternative) specification table
+#lm_treat_estimates <- sprintf('%.3f', unlist(lapply(model_cl_list, pull_treat)))
+#lm_treat_se <- sapply(unlist(lapply(model_cl_list, pull_treat_se_poisson)), function(x) paste0('(',x,')'))
+pois_treat_estimates <- sprintf('%.3f', unlist(lapply(poiss_list, pull_treat)))
+pois_treat_se <- sapply(unlist(lapply(poiss_list, pull_treat_se)), function(x) paste0('(',x,')'))
+main_spec_df <- data.frame(Model = c('(1) No controls','','(2) Block fixed effects','','(3) Full covariates',''),
+                           Poisson = c(rbind(pois_treat_estimates, pois_treat_se)))
+#alternate_spec_df <- data.frame(Model = c('(1) No controls','','(2) Block fixed effects','','(3) Full covariates',''),
+#                                Linear = c(rbind(lm_treat_estimates, lm_treat_se)),
+#                                Poisson = c(rbind(pois_treat_estimates, pois_treat_se)))
+kbl(main_spec_df, caption = 'Main Model', booktabs = TRUE)
+```
+
+
+
+
+
+
+```{r forest_plot_prep, echo=FALSE}
+# Create data frame of arm estimates and subgroup estimates that will be used for forest plot
+
+# Helper functions for pulling results
+# function to extract sums of interaction coefficients
+extract.int.coef <- function(obj, var1 = "treatment", var2 = NULL, level = NULL) {
+  sum.obj <- summary(obj)
+  overall <- sum.obj[which(rownames(sum.obj)==var1), 1]
+  if (!is.null(var2)) {
+    int.name <- paste0(var1, ":factor(", var2, ")", level)
+    int <- sum.obj[which(rownames(sum.obj)==int.name), 1]
+    sum <- overall + int
+  }
+  else {sum <- overall}
+  return(sum) 
+}
+# function to extract sums of interaction SEs
+extract.int.se <- function(obj, var1 = "treatment", var2 = NULL, level = NULL) {
+  sum.obj <- summary(obj)
+  overall <- sum.obj[which(rownames(sum.obj)==var1), 2]
+  if (!is.null(var2)) {
+    int.name <- paste0(var1, ":factor(", var2, ")", level)
+    int <- sum.obj[which(rownames(sum.obj)==int.name), 2]
+    cov.mat <- vcov(obj)
+    cov <- cov.mat[which(rownames(cov.mat)==var1),which(colnames(cov.mat)==int.name)]
+    se <- sqrt(overall^2 + int^2 + 2*cov)
+  }
+  else {se <- overall}
+  return(se) 
+}
+# interaction p-value
+int.pval <- function(obj, var1 = "treatment", var2 = NULL, level = NULL) {
+  sum.obj <- summary(obj)
+  if (is.null(var2)) {
+    pval <- sum.obj[which(rownames(sum.obj)==var1), 4]
+  } else {
+    int.name <- paste0("treatment:factor(", var2, ")", level)
+    pval <- sum.obj[which(rownames(sum.obj)==int.name), 4]
+  }
+  return(pval)
+}    
+
+
+# Results matrix to populate for use with forest plot of subgroups estimates
+row_names <- c('Overall',
+               'District',
+               '    A',
+               '    B',
+               '    C',
+               '    D',
+               '    E',
+               '    F',
+               'Grade',
+               '    PreK-K',
+               paste0('    ',as.character(1:12)),
+               'Race',
+               '    Black',
+               '    Hispanic',
+               '    White',
+               '    Multiple/Other',
+               'Gender',
+               '    Female',
+               '    Male',
+               'ELL Status',
+               '    Not ELL',
+               '    ELL',
+               'FRPL Status',
+               '    Not FRPL Eligible',
+               '    FRPL Eligible',
+               'Special Education Status',
+               '    Not Receiving Special Education Services',
+               '    Receiving Special Education Services',
+               'Treatment Arm',
+               '    Mail',
+               '    Backpack',
+               '    Text',
+               '    Email',
+               '    Robocall',
+               'Prior Absence Rate',
+               '    Low Abs (<10%)',
+               '    High Abs (>=10%)')
+col_names <- c('Estimate','SE (Clustered)','P-Val','N')
+forest_mat <- matrix(NA, nrow = length(row_names), ncol = length(col_names))
+rownames(forest_mat) <- row_names
+colnames(forest_mat) <- col_names
+
+# Populate matrix
+# Overall
+forest_mat[1,1] <- extract.int.coef(poiss_list[[3]]) # argument would be something from model_cl_list I think
+forest_mat[1,2] <- extract.int.se(poiss_list[[3]]) # argument would be something again from model_cl_list I think
+forest_mat[1,3] <- int.pval(poiss_list[[3]]) # not sure you can use this function; might just pull P-val directly from fit model without a helper function
+forest_mat[1,4] <- nrow(poiss_dat)
+
+# District
+forest_mat[2,3] <- pid.test_p$`Pr(>Chisq)`[2] # F test for joint hypothesis that all partner x treatment interaction estimates were 0
+
+forest_mat[3,1] <- extract.int.coef(by.pid_p, 'treatment')  #change all of these from by.x to by.x_p for poisson
+forest_mat[3,2] <- extract.int.se(by.pid_p, 'treatment')
+forest_mat[3,3] <- NA
+forest_mat[3,4] <- nrow(subset(poiss_dat, part == 1))
+
+forest_mat[4,1] <- extract.int.coef(by.pid_p, 'treatment', 'part', 2)
+forest_mat[4,2] <- extract.int.se(by.pid_p, 'treatment', 'part', 2)
+forest_mat[4,3] <- NA
+forest_mat[4,4] <- nrow(subset(poiss_dat, part == 2))
+
+forest_mat[5,1] <- extract.int.coef(by.pid_p, 'treatment', 'part', 3)
+forest_mat[5,2] <- extract.int.se(by.pid_p, 'treatment', 'part', 3)
+forest_mat[5,3] <- NA
+forest_mat[5,4] <- nrow(subset(poiss_dat, part == 3))
+
+forest_mat[6,1] <- extract.int.coef(by.pid_p, 'treatment', 'part', 4)
+forest_mat[6,2] <- extract.int.se(by.pid_p, 'treatment', 'part', 4)
+forest_mat[6,3] <- NA
+forest_mat[6,4] <- nrow(subset(poiss_dat, part == 4))
+
+forest_mat[7,1] <- extract.int.coef(by.pid_p, 'treatment', 'part', 5)
+forest_mat[7,2] <- extract.int.se(by.pid_p, 'treatment', 'part', 5)
+forest_mat[7,3] <- NA
+forest_mat[7,4] <- nrow(subset(poiss_dat, part == 5))
+
+forest_mat[8,1] <- extract.int.coef(by.pid_p, 'treatment', 'part', 6)
+forest_mat[8,2] <- extract.int.se(by.pid_p, 'treatment', 'part', 6)
+forest_mat[8,3] <- NA
+forest_mat[8,4] <- nrow(subset(poiss_dat, part == 6))
+
+# Grade
+forest_mat[9,3] <- grade.test_p$`Pr(>Chisq)`[2]
+
+forest_mat[10,1] <- extract.int.coef(by.grade_p, 'treatment')
+forest_mat[10,2] <- extract.int.se(by.grade_p, 'treatment')
+forest_mat[10,3] <- NA
+forest_mat[10,4] <- nrow(subset(model_data_pk_recoded_k_p, exp_grade == 0))
+
+remaining_grade_row_indices <- 11:22
+
+forest_mat[remaining_grade_row_indices,1] <- sapply(1:12, function(g) extract.int.coef(by.grade_p, 'treatment', 'exp_grade', g))
+forest_mat[remaining_grade_row_indices,2] <- sapply(1:12, function(g) extract.int.se(by.grade_p, 'treatment', 'exp_grade', g))
+forest_mat[remaining_grade_row_indices,3] <- NA
+forest_mat[remaining_grade_row_indices,4] <- sapply(1:12, function(g) nrow(subset(model_data_pk_recoded_k_p, exp_grade == g)))
+
+# Race
+forest_mat[23,3] <- race.test_p$`Pr(>Chisq)`[2]
+
+
+forest_mat[24,1] <- extract.int.coef(by.race_p, 'treatment') 
+forest_mat[24,2] <- extract.int.se(by.race_p, 'treatment')
+forest_mat[24,3] <- NA 
+forest_mat[24,4] <- nrow(subset(poiss_dat, xrace == 1))
+
+remaining_race_row_indices <- 25:27
+
+forest_mat[remaining_race_row_indices,1] <- sapply(c(3,5,7), function(r) extract.int.coef(by.race_p, 'treatment', 'xrace', r))
+forest_mat[remaining_race_row_indices,2] <- sapply(c(3,5,7), function(r) extract.int.se(by.race_p, 'treatment', 'xrace', r))
+forest_mat[remaining_race_row_indices,3] <- NA
+forest_mat[remaining_race_row_indices,4] <- sapply(c(3,5,7), function(r) nrow(subset(poiss_dat, xrace == r)))
+
+# Gender
+forest_mat[28,3] <- int.pval(by.gender_p, 'treatment', 'xmale', 1)  
+
+forest_mat[29,1] <- extract.int.coef(by.gender_p, 'treatment')
+forest_mat[29,2] <- extract.int.se(by.gender_p, 'treatment')  
+forest_mat[29,3] <- NA    
+forest_mat[29,4] <- nrow(subset(poiss_dat, xmale == 0))  
+
+forest_mat[30,1] <- extract.int.coef(by.gender_p, 'treatment', 'xmale', 1)
+forest_mat[30,2] <- extract.int.se(by.gender_p, 'treatment', 'xmale', 1)       
+forest_mat[30,3] <- NA   
+forest_mat[30,4] <- nrow(subset(poiss_dat, xmale == 1))           
+
+# ELL
+forest_mat[31,3] <- int.pval(by.ell_p, 'treatment', 'xell', 1)
+
+forest_mat[32,1] <- extract.int.coef(by.ell_p, 'treatment')
+forest_mat[32,2] <- extract.int.se(by.ell_p, 'treatment')  
+forest_mat[32,3] <- NA
+forest_mat[32,4] <- nrow(subset(poiss_dat, xell == 0))
+
+forest_mat[33,1] <- extract.int.coef(by.ell_p, 'treatment', 'xell', 1)
+forest_mat[33,2] <- extract.int.se(by.ell_p, 'treatment', 'xell', 1)
+forest_mat[33,3] <- NA
+forest_mat[33,4] <- nrow(subset(poiss_dat, xell == 1))
+
+# FRPL
+forest_mat[34,3] <- int.pval(by.frpl_p, 'treatment', 'xfrpl', 1)
+
+forest_mat[35,1] <- extract.int.coef(by.frpl_p, 'treatment')
+forest_mat[35,2] <- extract.int.se(by.frpl_p, 'treatment')  
+forest_mat[35,3] <- NA
+forest_mat[35,4] <- nrow(subset(data_no_cep_districts, xfrpl == 0))
+
+forest_mat[36,1] <- extract.int.coef(by.frpl_p, 'treatment', 'xfrpl', 1)
+forest_mat[36,2] <- extract.int.se(by.frpl_p, 'treatment', 'xfrpl', 1)
+forest_mat[36,3] <- NA
+forest_mat[36,4] <- nrow(subset(data_no_cep_districts, xfrpl == 1))
+
+#SPED
+forest_mat[37,3] <- int.pval(by.sped_p, 'treatment', 'xsped', 1)
+
+forest_mat[38,1] <- extract.int.coef(by.sped_p, 'treatment')
+forest_mat[38,2] <- extract.int.se(by.sped_p, 'treatment')  
+forest_mat[38,3] <- NA
+forest_mat[38,4] <- nrow(subset(poiss_dat, xsped == 0))
+
+forest_mat[39,1] <- extract.int.coef(by.sped_p, 'treatment', 'xsped', 1)
+forest_mat[39,2] <- extract.int.se(by.sped_p, 'treatment', 'xsped', 1)
+forest_mat[39,3] <- NA
+forest_mat[39,4] <- nrow(subset(poiss_dat, xsped == 1))
+
+# Arm
+forest_mat[40,3] <- arm.test_p$`Pr(>Chisq)`[2]
+
+arm_row_indices <- 41:45
+
+
+vcov(poiss_list.arm[[3]])
+
+forest_mat[arm_row_indices,1] <- sapply(2:6, function(a) poiss_list.arm[[3]]$glm_res$coefficients[paste0('factor(arm)',a)])
+forest_mat[arm_row_indices,2] <- sapply(2:6, function(a) {arm <- paste0('factor(arm)',a) 
+sqrt(vcov(poiss_list.arm[[3]])[arm,arm])})
+forest_mat[arm_row_indices,3] <- NA
+forest_mat[arm_row_indices,4] <- sapply(2:6, function(a) nrow(subset(data_arms, arm == a)))
+
+#By Prior Absences
+forest_mat[46,3] <- int.pval(by.prior_abs_p, 'treatment', 'prior_abs_high', 1)
+
+forest_mat[47,1] <- extract.int.coef(by.prior_abs_p, 'treatment')
+forest_mat[47,2] <- extract.int.se(by.prior_abs_p, 'treatment')  
+forest_mat[47,3] <- NA    
+forest_mat[47,4] <- nrow(subset(poiss_dat, prior_abs_high == 0))  
+
+forest_mat[48,1] <- extract.int.coef(by.prior_abs_p, 'treatment', 'prior_abs_high', 1)
+forest_mat[48,2] <- extract.int.se(by.prior_abs_p, 'treatment', 'prior_abs_high', 1)       
+forest_mat[48,3] <- NA   
+forest_mat[48,4] <- nrow(subset(poiss_dat, prior_abs_high == 1 & !is.na(prior_abs_rate) ))          
+
+
+
+
+# Calculate 95% confidence intervals
+forest_mat <- cbind(forest_mat, sapply(1:nrow(forest_mat), function(r) {v <- forest_mat[r,]
+return(v['Estimate'] - 1.96*v['SE (Clustered)'])}))
+forest_mat <- cbind(forest_mat, sapply(1:nrow(forest_mat), function(r) {v <- forest_mat[r,]
+return(v['Estimate'] + 1.96*v['SE (Clustered)'])})) 
+
+# Round off to three digits for results columns
+forest_mat[,c(1:3,5:6)] <- round(forest_mat[,c(1:3,5:6)],3)
+
+# Add grouping factor to aid in plotting
+forest_mat <- data.frame(forest_mat)
+forest_mat <- cbind(forest_mat,c('Overall',
+                                 rep('District',7),
+                                 rep('Grade',14),
+                                 rep('Race',5),
+                                 rep('Gender',3),
+                                 rep('ELL',3),
+                                 rep('FRPL',3),
+                                 rep('SPED',3),
+                                 rep('Arm',6), 
+                                 rep('Prior_Abs_rate',3)))
+colnames(forest_mat) <- c('Estimate','SE','P-Val','N','95% Lower','95% Upper','Category')
+```
+
+```{r consort_diagram, echo=FALSE}
+#knitr::include_graphics('R:/Proving_Ground/tables_figures_new/papers/personalized_messaging_spring2022/figures/PMConsortDiagram.PNG')
+```
+
+
+```{r forest_plot, fig.width=8.8, fig.height=9.4, echo=FALSE}
+
+# Helper function to stick in row of NAs between major sections
+add_na_rows <- function(m) { # takes a matrix/df as an argument, with second column for N, missing if the row begins a new section
+  na_indices <- which(is.na(m[,2]))
+  num_sections <- length(na_indices) + 1
+  sections <- lapply(1:num_sections, function(s) {
+    if (s == 1) {
+      return(m[1:(na_indices[s]-1),])
+    } else if (s == num_sections) {
+      return(m[na_indices[(s-1)]:nrow(m),])
+    } else {
+      return(m[na_indices[(s-1)]:(na_indices[s]-1),])
+    }
+  })
+  sections_with_na_row_added <- lapply(sections, function(s) rbind(s,rep(NA,5))) # again assuming there are five columns
+  return(do.call('rbind',sections_with_na_row_added))
+}
+
+# Add in rows of NAs to forest_mat for display purposes
+forest_mat_nas <- add_na_rows(forest_mat)
+
+# Function to exclude row names for NA buffer rows
+no_rowname_for_na_rows <-  function(m) {
+  rn <- rownames(m)
+  if (length(rownames(m)) != length(rn)) {stop('Something is not matching.')}
+  new_rn <- sapply(1:length(rn), function(r) ifelse(all(is.na(m[r,])), "", rn[r]))
+  return(new_rn)
+}
+
+# Table text for forest plot
+tabletext <- cbind(c('Subgroup',no_rowname_for_na_rows(forest_mat_nas)),
+                   c('N',forest_mat_nas$N),
+                   c('Estimate',forest_mat_nas$Estimate),
+                   c('95% CI',paste0('[',forest_mat_nas$`95% Lower`,', ',forest_mat_nas$`95% Upper`,']')),
+                   c('P-Value',forest_mat_nas$`P-Val`))
+tabletext[,4] <- sapply(tabletext[,4], function(i) {ifelse(i == '[NA, NA]', NA, i)})  
+
+# Forest plot
+forestplot(labeltext = tabletext, graph.pos = 3,
+           mean = c(NA, forest_mat_nas$Estimate),
+           lower = c(NA, forest_mat_nas$`95% Lower`),
+           upper = c(NA, forest_mat_nas$`95% Upper`),
+           xlab = 'Change in Absence Rate',
+           hrzl_lines = TRUE,
+           txt_gp = fpTxtGp(label = gpar(cex = 0.75),
+                            ticks = gpar(cex = 0.75),
+                            xlab = gpar(cex = 0.75),
+                            title = gpar(cex = 0.75)),
+           col = fpColors(box = 'black', lines = 'black', zero = 'gray50'),
+           zero = 0,
+           cex = 0.2,
+           lineheight = unit(0.38, 'cm'),
+           boxsize = 0.3,
+           colgap = unit(3,'mm'),
+           lwd.ci = 1,
+           ci.vertices = TRUE,
+           ci.vertices.height = 0.2,
+           graphwidth = unit(90,'mm'),
+           line.margin = unit(50,'mm'),
+           title = 'Figure 2: Treatment Estimates of Percent Change in Cumulative Absences by District, Subgroup, and Arm')
+```
+
+
+```{r sensitivity_checks_prep, echo=FALSE}
+# Create data frame of sensitivity checks estimates that will be used for forest plot
+
+
+# Helper functions for pulling results
+# function to extract sums of interaction coefficients
+extract.int.coef <- function(obj, var1 = "treatment", var2 = NULL, level = NULL) {
+  sum.obj <- summary(obj)
+  overall <- sum.obj[which(rownames(sum.obj)==var1), 1]
+  if (!is.null(var2)) {
+    int.name <- paste0(var1, ":factor(", var2, ")", level)
+    int <- sum.obj[which(rownames(sum.obj)==int.name), 1]
+    sum <- overall + int
+  }
+  else {sum <- overall}
+  return(sum) 
+}
+# function to extract sums of interaction SEs
+extract.int.se <- function(obj, var1 = "treatment", var2 = NULL, level = NULL) {
+  sum.obj <- summary(obj)
+  overall <- sum.obj[which(rownames(sum.obj)==var1), 2]
+  if (!is.null(var2)) {
+    int.name <- paste0(var1, ":factor(", var2, ")", level)
+    int <- sum.obj[which(rownames(sum.obj)==int.name), 2]
+    cov.mat <- vcov(obj)
+    cov <- cov.mat[which(rownames(cov.mat)==var1),which(colnames(cov.mat)==int.name)]
+    se <- sqrt(overall^2 + int^2 + 2*cov)
+  }
+  else {se <- overall}
+  return(se) 
+}
+# interaction p-value
+int.pval <- function(obj, var1 = "treatment", var2 = NULL, level = NULL) {
+  sum.obj <- summary(obj)
+  if (is.null(var2)) {
+    pval <- sum.obj[which(rownames(sum.obj)==var1), 4]
+  } else {
+    int.name <- paste0("treatment:factor(", var2, ")", level)
+    pval <- sum.obj[which(rownames(sum.obj)==int.name), 4]
+  }
+  return(pval)
+}    
+
+
+# Results matrix to populate for use with forest plot of subgroups estimates
+row_names <- c('Including/Excluding District D',
+               '    Including',
+               '    Excluding',
+               '10-Week Intervals',
+               '   0-10 Weeks',
+               '   10-20 Weeks',
+               '   20-30 Weeks')
+col_names <- c('Estimate','SE (Clustered)','P-Val','N')
+forest_mat <- matrix(NA, nrow = length(row_names), ncol = length(col_names))
+rownames(forest_mat) <- row_names
+colnames(forest_mat) <- col_names
+
+
+forest_mat[2,1] <- extract.int.coef(poiss_list[[3]]) # argument would be something from model_cl_list I think
+forest_mat[2,2] <- extract.int.se(poiss_list[[3]]) # argument would be something again from model_cl_list I think
+forest_mat[2,3] <- int.pval(poiss_list[[3]]) # not sure you can use this function; might just pull P-val directly from fit model without a helper function
+forest_mat[2,4] <- nrow(poiss_dat)
+
+forest_mat[3,1] <- extract.int.coef(poiss_list.[REMOVED]_excluded[[1]])
+forest_mat[3,2] <- extract.int.se(poiss_list.[REMOVED]_excluded[[1]]) # argument would be something again from model_cl_list I think
+forest_mat[3,3] <- int.pval(poiss_list.weeks[[1]]) # not sure you can use this function; might just pull P-val directly from fit model without a helper function
+forest_mat[3,4] <- nrow(data_[REMOVED]_excluded)
+
+# 10-Week Intervals
+
+
+forest_mat[5,1] <- extract.int.coef(poiss_list.weeks[[1]])
+forest_mat[5,2] <- extract.int.se(poiss_list.weeks[[1]]) # argument would be something again from model_cl_list I think
+forest_mat[5,3] <- int.pval(poiss_list.weeks[[1]]) # not sure you can use this function; might just pull P-val directly from fit model without a helper function
+forest_mat[5,4] <- nrow(data_weeks_0_to_10)
+
+forest_mat[6,1] <- extract.int.coef(poiss_list.weeks[[2]])
+forest_mat[6,2] <- extract.int.se(poiss_list.weeks[[2]]) # argument would be something again from model_cl_list I think
+forest_mat[6,3] <- int.pval(poiss_list.weeks[[2]]) # not sure you can use this function; might just pull P-val directly from fit model without a helper function
+forest_mat[6,4] <- nrow(data_weeks_10_to_20)
+
+forest_mat[7,1] <- extract.int.coef(poiss_list.weeks[[3]])
+forest_mat[7,2] <- extract.int.se(poiss_list.weeks[[3]]) # argument would be something again from model_cl_list I think
+forest_mat[7,3] <- int.pval(poiss_list.weeks[[3]]) # not sure you can use this function; might just pull P-val directly from fit model without a helper function
+forest_mat[7,4] <- nrow(data_weeks_20_to_30)
+
+
+# Calculate 95% confidence intervals
+forest_mat <- cbind(forest_mat, sapply(1:nrow(forest_mat), function(r) {v <- forest_mat[r,]
+return(v['Estimate'] - 1.96*v['SE (Clustered)'])}))
+forest_mat <- cbind(forest_mat, sapply(1:nrow(forest_mat), function(r) {v <- forest_mat[r,]
+return(v['Estimate'] + 1.96*v['SE (Clustered)'])})) 
+
+# Round off to three digits for results columns
+forest_mat[,c(1:3,5:6)] <- round(forest_mat[,c(1:3,5:6)],3)
+
+
+# Add grouping factor to aid in plotting
+forest_mat <- data.frame(forest_mat)
+forest_mat <- cbind(forest_mat,c(rep('Including/Excluding District D',3),
+                                 rep('10-Week Estimates',4)))
+colnames(forest_mat) <- c('Estimate','SE','P-Val','N','95% Lower','95% Upper','Category')
+# forest_mat[1,1] = ""
+#names(forest_mat)[1]=""
+# colnames(forest_mat) <- c('Estimate','SE','P-Val','N','95% Lower','95% Upper')
+```
+
+
+```{r sensitivity forest_plot, fig.width=8.5, fig.height=3, echo=FALSE}
+
+# Helper function to stick in row of NAs between major sections
+add_na_rows <- function(m) { # takes a matrix/df as an argument, with second column for N, missing if the row begins a new section
+  na_indices <- which(is.na(m[,2]))
+  num_sections <- length(na_indices) + 1
+  sections <- lapply(1:num_sections, function(s) {
+    if (s == 1) {
+      return(m[1:(na_indices[s]-1),])
+    } else if (s == num_sections) {
+      return(m[na_indices[(s-1)]:nrow(m),])
+    } else {
+      return(m[na_indices[(s-1)]:(na_indices[s]-1),])
+    }
+  })
+  sections_with_na_row_added <- lapply(sections, function(s) rbind(s,rep(NA,5))) # again assuming there are five columns
+  return(do.call('rbind',sections_with_na_row_added))
+}
+
+# Add in rows of NAs to forest_mat for display purposes
+forest_mat_nas <- add_na_rows(forest_mat)
+
+# Function to exclude row names for NA buffer rows
+no_rowname_for_na_rows <-  function(m) {
+  rn <- rownames(m)
+  if (length(rownames(m)) != length(rn)) {stop('Something is not matching.')}
+  new_rn <- sapply(1:length(rn), function(r) ifelse(all(is.na(m[r,])), "", rn[r]))
+  return(new_rn)
+}
+
+forest_mat_nas <- forest_mat_nas[c(1, 4:nrow(forest_mat_nas)), ]
+
+# Table text for forest plot
+tabletext <- cbind(c('',no_rowname_for_na_rows(forest_mat_nas)),
+                   c('N',forest_mat_nas$N),
+                   c('Estimate',forest_mat_nas$Estimate),
+                   c('95% CI',paste0('[',forest_mat_nas$`95% Lower`,', ',forest_mat_nas$`95% Upper`,']')),
+                   c('P-Value',forest_mat_nas$`P-Val`))
+tabletext[,4] <- sapply(tabletext[,4], function(i) {ifelse(i == '[NA, NA]', NA, i)})  
+
+# Forest plot
+forestplot(labeltext = tabletext, graph.pos = 3,
+           mean = c(NA, forest_mat_nas$Estimate),
+           lower = c(NA, forest_mat_nas$`95% Lower`),
+           upper = c(NA, forest_mat_nas$`95% Upper`),
+           xlab = 'Change in Absence Rate',
+           hrzl_lines = TRUE,
+           txt_gp = fpTxtGp(label = gpar(cex = 0.75),
+                            ticks = gpar(cex = 0.75),
+                            xlab = gpar(cex = 0.75),
+                            title = gpar(cex = 0.75)),
+           col = fpColors(box = 'black', lines = 'black', zero = 'gray50'),
+           zero = 0,
+           cex = 0.2,
+           lineheight = unit(0.5, 'cm'),
+           boxsize = 0.3,
+           colgap = unit(3,'mm'),
+           lwd.ci = 1,
+           ci.vertices = TRUE,
+           ci.vertices.height = 0.2,
+           graphwidth = unit(90,'mm'),
+           line.margin = unit(50,'mm'),
+           title = 'Appendix Figure 2: Sensitivity Checks')  
+
+
+```
+
+
+
+
+
+
